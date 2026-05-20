@@ -11,13 +11,14 @@ import (
 )
 
 type ComprehensiveItemSpec struct {
-	CampaignID    string
-	TenantID      int64
-	Workload      activity.WorkloadFindings
-	PolicyMode    model.PolicyMode
-	CascadeUpTo   model.CascadeUpTo
-	MaxDeltaPct   int
-	TriggerSource model.TriggerSource
+	CampaignID       string
+	ParentCampaignID string // non-empty on manual triggers — used for campaign progress tracking
+	TenantID         int64
+	Workload         activity.WorkloadFindings
+	PolicyMode       model.PolicyMode
+	CascadeUpTo      model.CascadeUpTo
+	MaxDeltaPct      int
+	TriggerSource    model.TriggerSource
 }
 
 // ComprehensiveItemWorkflow processes a single workload:
@@ -27,6 +28,7 @@ type ComprehensiveItemSpec struct {
 // 4. Run PromotionWorkflow with the pre-patched content
 func ComprehensiveItemWorkflow(ctx workflow.Context, spec ComprehensiveItemSpec) (ItemResult, error) {
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
+	notifyCtx := workflow.WithActivityOptions(ctx, notifyActivityOptions())
 	var a *activity.Activities
 
 	var mapping activity.ResolveMappingOutput
@@ -38,20 +40,23 @@ func ComprehensiveItemWorkflow(ctx workflow.Context, spec ComprehensiveItemSpec)
 		return ItemResult{Status: model.ItemStatusFailed, Reason: fmt.Sprintf("resolve_mapping: %v", err)}, nil
 	}
 	if !mapping.Found {
-		_ = workflow.ExecuteActivity(ctx, a.Notify, activity.NotifyInput{
+		_ = workflow.ExecuteActivity(notifyCtx, a.Notify, activity.NotifyInput{
 			EventType: "finding_opened",
 			TenantID:  spec.TenantID,
 			Data: map[string]any{
 				"rule_id":     "PRBOT-001",
 				"workload_id": spec.Workload.WorkloadUID,
-				"reason":      "no_mapping",
+				"namespace":   spec.Workload.Namespace,
+				"cluster":     spec.Workload.ClusterName,
 			},
 		}).Get(ctx, nil)
+		notifyCampaignItem(notifyCtx, a, spec, model.ItemStatusSkipped)
 		return ItemResult{Status: model.ItemStatusSkipped, Reason: "no_mapping"}, nil
 	}
 
 	paths := mapping.Mapping.Definition.Spec.GitOps.Paths
 	if len(paths) == 0 {
+		notifyCampaignItem(notifyCtx, a, spec, model.ItemStatusSkipped)
 		return ItemResult{Status: model.ItemStatusSkipped, Reason: "no_paths"}, nil
 	}
 
@@ -89,6 +94,7 @@ func ComprehensiveItemWorkflow(ctx workflow.Context, spec ComprehensiveItemSpec)
 	}
 
 	if patch.CorrectedManifest == "" || len(patch.Applied) == 0 {
+		notifyCampaignItem(notifyCtx, a, spec, model.ItemStatusSkipped)
 		return ItemResult{Status: model.ItemStatusSkipped, Reason: "nothing_to_fix"}, nil
 	}
 
@@ -124,7 +130,26 @@ func ComprehensiveItemWorkflow(ctx workflow.Context, spec ComprehensiveItemSpec)
 	childCtx := workflow.WithChildOptions(ctx, cwo)
 	var pr PromotionResult
 	if err := workflow.ExecuteChildWorkflow(childCtx, PromotionWorkflow, promo).Get(ctx, &pr); err != nil {
+		notifyCampaignItem(notifyCtx, a, spec, model.ItemStatusFailed)
 		return ItemResult{Status: model.ItemStatusFailed, Reason: err.Error()}, nil
 	}
+	notifyCampaignItem(notifyCtx, a, spec, pr.FinalStatus)
 	return ItemResult{Status: pr.FinalStatus, Promotion: pr, Reason: pr.StoppedReason}, nil
+}
+
+// notifyCampaignItem sends a campaign_item_completed event. ctx must already have notifyActivityOptions applied.
+func notifyCampaignItem(ctx workflow.Context, a *activity.Activities, spec ComprehensiveItemSpec, status model.ItemStatus) {
+	if spec.ParentCampaignID == "" {
+		return
+	}
+	_ = workflow.ExecuteActivity(ctx, a.Notify, activity.NotifyInput{
+		EventType: "campaign_item_completed",
+		TenantID:  spec.TenantID,
+		Data: map[string]any{
+			"campaign_id":  spec.ParentCampaignID,
+			"item_id":      spec.CampaignID,
+			"workload_uid": spec.Workload.WorkloadUID,
+			"status":       string(status),
+		},
+	}).Get(ctx, nil)
 }

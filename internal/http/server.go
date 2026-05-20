@@ -26,6 +26,7 @@ func NewRouter(h *Handlers, internalSecret string, log *observability.Logger) ht
 		r.Get("/v1/gitops-profiles", h.ListGitOpsProfiles)
 		r.Put("/v1/gitops-profiles", h.UpsertGitOpsProfile)
 		r.Post("/v1/tenants/{tenantID}/github-configured", h.OnGitHubConfigured)
+		r.Post("/v1/manifest-campaigns", h.TriggerManifestCampaign)
 	})
 	return r
 }

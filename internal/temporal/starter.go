@@ -61,6 +61,23 @@ func (s *Starter) Cancel(ctx context.Context, campaignID string) error {
 	return s.C.SignalWorkflow(ctx, campaignID, "", workflow.SignalCancelCampaign, nil)
 }
 
+func (s *Starter) StartManifest(ctx context.Context, tenantID int64, campaignID string) (string, string, error) {
+	opts := client.StartWorkflowOptions{
+		ID:        campaignID,
+		TaskQueue: s.TaskQueue,
+	}
+	spec := workflow.DiscoverSpec{
+		TenantID:   tenantID,
+		RuleID:     "manifest",
+		CampaignID: campaignID,
+	}
+	we, err := s.C.ExecuteWorkflow(ctx, opts, workflow.DiscoverComprehensiveWorkflow, spec)
+	if err != nil {
+		return "", "", err
+	}
+	return we.GetID(), we.GetRunID(), nil
+}
+
 // MemoryStarter implements CampaignStarter without a Temporal cluster.
 // It just records start calls — useful for local dev and tests.
 type MemoryStarter struct {
@@ -98,4 +115,16 @@ func (m *MemoryStarter) Status(_ context.Context, campaignID string) (thttp.Camp
 
 func (m *MemoryStarter) Cancel(_ context.Context, _ string) error {
 	return nil
+}
+
+func (m *MemoryStarter) StartManifest(_ context.Context, tenantID int64, campaignID string) (string, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.campaigns[campaignID] = model.CampaignSpec{
+		CampaignID:    campaignID,
+		TenantID:      tenantID,
+		TriggerSource: model.TriggerManual,
+		RuleID:        "manifest",
+	}
+	return campaignID, "mem-run", nil
 }

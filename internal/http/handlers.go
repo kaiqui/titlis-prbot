@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -34,6 +35,11 @@ type Scheduler interface {
 	SyncPolicies(ctx context.Context, policies []model.AutoRemediationPolicy) error
 }
 
+// ManifestStarter starts DiscoverComprehensiveWorkflow on demand (manual trigger).
+type ManifestStarter interface {
+	StartManifest(ctx context.Context, tenantID int64, campaignID string) (workflowID, runID string, err error)
+}
+
 // FactoryInvalidator allows clearing the cached GitHub provider for a tenant
 // so the next call fetches a fresh token.
 type FactoryInvalidator interface {
@@ -46,16 +52,17 @@ type CampaignStatusSnapshot struct {
 }
 
 type Handlers struct {
-	Mappings   repo.MappingsRepo
-	Profiles   repo.GitOpsProfilesRepo
-	Policies   repo.PoliciesRepo
-	Starter    CampaignStarter
-	Scanner    *scanner.Scanner
-	Provider   gitprovider.GitProvider // used for webhook parse on incoming GitHub events
-	Factory    gitprovider.Factory     // used to resolve per-tenant provider for discovery
-	Sched      Scheduler               // may be nil (Noop) when Temporal is disabled
-	Invalidate FactoryInvalidator      // may be nil when using StaticFactory
-	Log        *observability.Logger   // may be nil
+	Mappings       repo.MappingsRepo
+	Profiles       repo.GitOpsProfilesRepo
+	Policies       repo.PoliciesRepo
+	Starter        CampaignStarter
+	ManifestStart  ManifestStarter
+	Scanner        *scanner.Scanner
+	Provider       gitprovider.GitProvider // used for webhook parse on incoming GitHub events
+	Factory        gitprovider.Factory     // used to resolve per-tenant provider for discovery
+	Sched          Scheduler               // may be nil (Noop) when Temporal is disabled
+	Invalidate     FactoryInvalidator      // may be nil when using StaticFactory
+	Log            *observability.Logger   // may be nil
 
 	mu       sync.Mutex
 	statuses map[string]CampaignStatusSnapshot
@@ -508,6 +515,40 @@ func (h *Handlers) runDiscovery(tenantID int64) {
 	}
 
 	logf("github-configured: done", "tenant_id", tenantID, "repos_discovered", len(repoURLs))
+}
+
+// TriggerManifestCampaign starts a DiscoverComprehensiveWorkflow on demand.
+// Returns 409 if ManifestStart is nil (Temporal disabled) or a meaningful error.
+func (h *Handlers) TriggerManifestCampaign(w http.ResponseWriter, r *http.Request) {
+	tenantID, err := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	if err != nil || tenantID == 0 {
+		// Also accept tenant_id in JSON body.
+		var body struct {
+			TenantID int64 `json:"tenant_id"`
+		}
+		if jerr := json.NewDecoder(r.Body).Decode(&body); jerr != nil || body.TenantID == 0 {
+			writeError(w, http.StatusBadRequest, "tenant_id required")
+			return
+		}
+		tenantID = body.TenantID
+	}
+
+	if h.ManifestStart == nil {
+		writeError(w, http.StatusServiceUnavailable, "temporal disabled")
+		return
+	}
+
+	campaignID := fmt.Sprintf("manual-manifest-%d-%d", tenantID, time.Now().UnixMilli())
+	wfID, runID, startErr := h.ManifestStart.StartManifest(r.Context(), tenantID, campaignID)
+	if startErr != nil {
+		writeError(w, http.StatusInternalServerError, startErr.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"campaign_id": campaignID,
+		"workflow_id": wfID,
+		"run_id":      runID,
+	})
 }
 
 // filterReposWithTitlisConfig returns repos from the list that contain .titlis/service.yaml.

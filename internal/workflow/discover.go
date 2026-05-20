@@ -11,8 +11,9 @@ import (
 )
 
 type DiscoverSpec struct {
-	TenantID int64
-	RuleID   string
+	TenantID   int64
+	RuleID     string
+	CampaignID string // set for manual triggers; empty for scheduled runs (no campaign tracking)
 }
 
 type DiscoverResult struct {

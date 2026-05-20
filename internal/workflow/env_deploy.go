@@ -54,6 +54,17 @@ func defaultActivityOptions() workflow.ActivityOptions {
 	}
 }
 
+// notifyActivityOptions are used for fire-and-forget notification activities.
+// A single attempt with a short timeout — failures are silently skipped.
+func notifyActivityOptions() workflow.ActivityOptions {
+	return workflow.ActivityOptions{
+		StartToCloseTimeout: 15 * time.Second,
+		RetryPolicy: &temporal.RetryPolicy{
+			MaximumAttempts: 1,
+		},
+	}
+}
+
 func EnvDeployWorkflow(ctx workflow.Context, spec EnvDeploySpec) (EnvDeployResult, error) {
 	ctx = workflow.WithActivityOptions(ctx, defaultActivityOptions())
 	var a *activity.Activities

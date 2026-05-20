@@ -150,17 +150,20 @@ func main() {
 
 	// --- Temporal setup ---
 	var (
-		starter thttp.CampaignStarter
-		tClient client.Client
-		w       worker.Worker
-		sched   thttp.Scheduler
+		starter        thttp.CampaignStarter
+		manifestStarter thttp.ManifestStarter
+		tClient        client.Client
+		w              worker.Worker
+		sched          thttp.Scheduler
 	)
 
 	if !cfg.DisableTemporal {
 		c, dialErr := client.Dial(client.Options{HostPort: cfg.TemporalHost, Namespace: cfg.TemporalNamespace})
 		if dialErr != nil {
 			log.Warn("temporal not reachable; falling back to memory starter", "error", dialErr.Error())
-			starter = temporal.NewMemoryStarter()
+			mem := temporal.NewMemoryStarter()
+			starter = mem
+			manifestStarter = mem
 			sched = temporal.NoopScheduleManager{}
 		} else {
 			tClient = c
@@ -173,7 +176,9 @@ func main() {
 					log.Error("temporal worker stopped", "error", err.Error())
 				}
 			}()
-			starter = temporal.NewStarter(c, cfg.TemporalTaskQueue)
+			ts := temporal.NewStarter(c, cfg.TemporalTaskQueue)
+			starter = ts
+			manifestStarter = ts
 			schedMgr := temporal.NewScheduleManager(c, cfg.TemporalTaskQueue)
 			sched = schedMgr
 
@@ -186,12 +191,15 @@ func main() {
 		}
 	} else {
 		log.Info("temporal disabled by configuration")
-		starter = temporal.NewMemoryStarter()
+		mem := temporal.NewMemoryStarter()
+		starter = mem
+		manifestStarter = mem
 		sched = temporal.NoopScheduleManager{}
 	}
 
 	// --- HTTP handlers & router ---
 	handlers := thttp.NewHandlers(mappings, profiles, policies, starter, sc, globalProvider)
+	handlers.ManifestStart = manifestStarter
 	handlers.Factory = factory
 	handlers.Sched = sched
 	handlers.Log = log
