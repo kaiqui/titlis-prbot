@@ -1,0 +1,132 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: titlis-prbot-config
+  namespace: __NAMESPACE__
+data:
+  PORT: "8080"
+  TITLIS_APP_ENV: "preprod"
+  LOG_LEVEL: "info"
+  LOG_FORMAT: "json"
+  TITLIS_API_HOST: "titlis-api"
+  TITLIS_API_PORT: "8080"
+  TITLIS_API_UDP_HOST: "titlis-api"
+  TITLIS_API_UDP_PORT: "8125"
+  TITLIS_INSIGHTS_HOST: "titlis-insights"
+  TITLIS_INSIGHTS_PORT: "8091"
+  TEMPORAL_HOST: "__TEMPORAL_FRONTEND_HOST__"
+  TEMPORAL_NAMESPACE: "titlis"
+  TEMPORAL_TASK_QUEUE: "prbot-main"
+  SCANNER_INTERVAL_MINUTES: "60"
+  PRBOT_WORKER_CONCURRENT_ACTIVITIES: "16"
+  PRBOT_WORKER_CONCURRENT_WORKFLOWS: "64"
+  PRBOT_DEFAULT_PR_CHECKS_TIMEOUT_MINUTES: "30"
+  PRBOT_USE_MEMORY_PROVIDER: "false"
+  PRBOT_DISABLE_TEMPORAL: "__PRBOT_DISABLE_TEMPORAL__"
+  GITHUB_APP_PRIVATE_KEY_PATH: "/secrets/github-app.pem"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: titlis-prbot-secrets
+  namespace: __NAMESPACE__
+type: Opaque
+stringData:
+  TITLIS_API_INTERNAL_SECRET: "__TITLIS_AI_INTERNAL_SECRET__"
+  TITLIS_INSIGHTS_INTERNAL_SECRET: "__INSIGHTS_INTERNAL_SECRET__"
+  DATABASE_URL: "__PRBOT_DATABASE_URL__"
+  GITHUB_APP_ID: "__GITHUB_APP_ID__"
+  GITHUB_APP_INSTALLATION_ID: "__GITHUB_APP_INSTALLATION_ID__"
+  GITHUB_WEBHOOK_SECRET: "__GITHUB_WEBHOOK_SECRET__"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: titlis-prbot-github-key
+  namespace: __NAMESPACE__
+type: Opaque
+data:
+  github-app.pem: "__GITHUB_APP_PRIVATE_KEY_B64__"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: titlis-prbot
+  namespace: __NAMESPACE__
+  labels:
+    app: titlis-prbot
+    tags.datadoghq.com/env: "preprod"
+    tags.datadoghq.com/service: "titlis-prbot"
+    tags.datadoghq.com/version: "__IMAGE_TAG__"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: titlis-prbot
+  template:
+    metadata:
+      labels:
+        app: titlis-prbot
+        tags.datadoghq.com/env: "preprod"
+        tags.datadoghq.com/service: "titlis-prbot"
+        tags.datadoghq.com/version: "__IMAGE_TAG__"
+    spec:
+      containers:
+        - name: titlis-prbot
+          image: __DOCKERHUB_USER__/titlis-prbot:__IMAGE_TAG__
+          imagePullPolicy: __IMAGE_PULL_POLICY__
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: titlis-prbot-config
+            - secretRef:
+                name: titlis-prbot-secrets
+          env:
+            - name: DD_AGENT_HOST
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
+          volumeMounts:
+            - name: github-app-key
+              mountPath: /secrets
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: github-app-key
+          secret:
+            secretName: titlis-prbot-github-key
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: titlis-prbot
+  namespace: __NAMESPACE__
+spec:
+  selector:
+    app: titlis-prbot
+  ports:
+    - port: 8080
+      targetPort: http
+      protocol: TCP
+      name: http
