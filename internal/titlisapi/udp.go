@@ -111,6 +111,12 @@ func (c *RealUDPClient) Send(_ context.Context, eventType string, tenantID int64
 	return err
 }
 
+type NoopEventClient struct{}
+
+func NewNoopEventClient() *NoopEventClient { return &NoopEventClient{} }
+
+func (NoopEventClient) Send(_ context.Context, _ string, _ int64, _ any) error { return nil }
+
 type RecordedEvent struct {
 	Type     string
 	TenantID int64

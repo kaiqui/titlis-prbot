@@ -12,9 +12,6 @@ type Settings struct {
 	TitlisAPIHost string `envconfig:"TITLIS_API_HOST" default:"titlis-api"`
 	TitlisAPIPort int    `envconfig:"TITLIS_API_PORT" default:"8080"`
 
-	TitlisAPIUDPHost string `envconfig:"TITLIS_API_UDP_HOST" default:"titlis-api"`
-	TitlisAPIUDPPort int    `envconfig:"TITLIS_API_UDP_PORT" default:"8125"`
-
 	InsightsHost           string `envconfig:"TITLIS_INSIGHTS_HOST" default:"titlis-insights"`
 	InsightsPort           int    `envconfig:"TITLIS_INSIGHTS_PORT" default:"8091"`
 	InsightsInternalSecret string `envconfig:"TITLIS_INSIGHTS_INTERNAL_SECRET" default:"dev-secret"`

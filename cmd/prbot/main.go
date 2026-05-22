@@ -115,14 +115,13 @@ func main() {
 		log.Warn("insights not configured; using static stub")
 	}
 
-	// Use HTTP event transport (authenticated) in non-local envs; fall back to UDP for local.
 	var udp titlisapi.UDPClient
-	if cfg.AppEnv == "local" || cfg.TitlisAPIHost == "" {
-		udp = titlisapi.NewUDPClient(cfg.TitlisAPIUDPHost, cfg.TitlisAPIUDPPort)
-		log.Info("using udp event transport")
-	} else {
+	if cfg.TitlisAPIHost != "" {
 		udp = titlisapi.NewHTTPEventClient(cfg.TitlisAPIHost, cfg.TitlisAPIPort, cfg.InternalSecret)
 		log.Info("using http event transport", "host", cfg.TitlisAPIHost, "port", cfg.TitlisAPIPort)
+	} else {
+		udp = titlisapi.NewNoopEventClient()
+		log.Warn("titlis-api host not configured; events will be dropped")
 	}
 	var aiManifestClient titlisapi.AIManifestClient
 	if cfg.AppEnv == "local" || cfg.TitlisAPIHost == "" {
